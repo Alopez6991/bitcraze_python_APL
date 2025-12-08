@@ -1,0 +1,4 @@
+# SD-card log session name (max 12 chars)
+usd_name: file_test
+# Seconds to keep logging active
+duration_s: 5.0

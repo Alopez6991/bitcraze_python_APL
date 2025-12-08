@@ -28,3 +28,4 @@ docs/api/cflib
 examples/flowdeck/logs/
 examples/flowdeck/bad_data/
 examples/flowdeck/analysis/debug.log
+examples/flowdeck/analysis/crazyflie_analysis.ipynb
