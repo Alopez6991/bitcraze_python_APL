@@ -13,9 +13,12 @@ import time
 import cflib.crtp
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 from cflib.positioning.motion_commander import MotionCommander
+# Velocity-based flight: fly at V m/s for T seconds
+Velocity = 0.5
+Duration = 4
 
 # Change this to your Crazyflie URI
-URI = 'radio://0/80/2M/E7E7E7E703'
+URI = 'radio://0/80/2M/E7E7E7E701'
 
 
 def _get_param(scf, name):
@@ -88,30 +91,76 @@ def main():
 
         _ = print_flow_status(scf)
 
+        # Enable USD logging before takeoff
+        print('Enabling USD logging (usd.logging = 1)...')
+        scf.cf.param.set_value('usd.logging', '1')
+        time.sleep(0.1)
+
         mc = None
         try:
             # Create MotionCommander (normally auto-takes off to default_height)
             mc = MotionCommander(scf, default_height=0.3)
 
-            # Explicit takeoff to a target height (safe & clear)
-            print('Taking off to 1.5 m...')
-            mc.take_off(height=1.0, velocity=0.5)
-            time.sleep(5.0)
+            # Explicit takeoff
+            print('Taking off to 1.0 m...')
+            mc.take_off(height=1.0, velocity=.5)
+            time.sleep(2.0)
 
-            print("Forward 1.5 m")
-            mc.forward(1.5, velocity=0.5)
-            time.sleep(4.0)
+            # --- Pass 1: heading 0° ---
+            print(f'Forward {Velocity} m/s for {Duration} s')
+            mc.start_linear_motion(Velocity, 0.0, 0.0)
+            time.sleep(Duration)
+            mc.stop()
+            time.sleep(0.5)
 
-            # print("right 1.5 m")
-            # mc.right(1.5, velocity=0.5)
-            # time.sleep(2.0)
+            print(f'Backward {Velocity} m/s for {Duration} s')
+            mc.start_linear_motion(-Velocity, 0.0, 0.0)
+            time.sleep(Duration)
+            mc.stop()
+            time.sleep(0.5)
 
-            # print('forward 5.0 m')
-            # mc.left(2.5, velocity=1.5)
-            # time.sleep(5.0)
+            print(f'Left {Velocity} m/s for {Duration} s')
+            mc.start_linear_motion(0.0, Velocity, 0.0)
+            time.sleep(Duration)
+            mc.stop()
+            time.sleep(0.5)
 
+            print(f'Right {Velocity} m/s for {Duration} s')
+            mc.start_linear_motion(0.0, -Velocity, 0.0)
+            time.sleep(Duration)
+            mc.stop()
+            time.sleep(0.5)
+            # Turn 90° left
+            print('Turning 90° left...')
+            mc.turn_left(90)
+            time.sleep(1.0)
+
+            # --- Pass 2: heading 90° ---
+            print(f'Forward {Velocity} m/s for {Duration} s')
+            mc.start_linear_motion(Velocity, 0.0, 0.0)
+            time.sleep(Duration)
+            mc.stop()
+            time.sleep(0.5)
+
+            print(f'Backward {Velocity} m/s for {Duration} s')
+            mc.start_linear_motion(-Velocity, 0.0, 0.0)
+            time.sleep(Duration)
+            mc.stop()
+            time.sleep(0.5)
+
+            print(f'Left {Velocity} m/s for {Duration} s')
+            mc.start_linear_motion(0.0, Velocity, 0.0)
+            time.sleep(Duration)
+            mc.stop()
+            time.sleep(0.5)
+
+            print(f'Right {Velocity} m/s for {Duration} s')
+            mc.start_linear_motion(0.0, -Velocity, 0.0)
+            time.sleep(Duration)
+            mc.stop()
+            time.sleep(0.5)
             print('Hover 1.0 s')
-            time.sleep(5.0)
+            time.sleep(1.0)
 
             # Stop before landing to avoid 'on the ground' exception
             print('Stopping (hover hold) ...')
@@ -128,7 +177,19 @@ def main():
         finally:
             # Safety: stop any motion & disarm
             if mc is not None:
-                mc.stop()
+                try:
+                    mc.stop()
+                except Exception:
+                    pass  # already landed / on the ground — safe to ignore
+
+            # Disable USD logging after landing so the file is flushed & closed
+            print('Disabling USD logging (usd.logging = 0)...')
+            try:
+                scf.cf.param.set_value('usd.logging', '0')
+                time.sleep(1.0)  # give the SD card time to finish writing
+            except Exception:
+                pass
+
             if hasattr(scf.cf.platform, 'send_arming_request'):
                 print('Disarming...')
                 scf.cf.platform.send_arming_request(False)

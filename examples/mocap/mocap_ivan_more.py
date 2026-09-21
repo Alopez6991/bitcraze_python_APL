@@ -44,7 +44,7 @@ from cflib.crazyflie.syncLogger import SyncLogger
 from cflib.utils import uri_helper
 
 # URI to the Crazyflie to connect to
-uri = uri_helper.uri_from_env(default='radio://0/80/2M/E7E7E7E720')
+uri = uri_helper.uri_from_env(default='radio://0/80/2M/E7E7E7E702')
 
 # The host name or ip address of the mocap system
 host_name = '192.168.209.81'
@@ -55,7 +55,7 @@ host_name = '192.168.209.81'
 mocap_system_type = 'optitrack'
 
 # The name of the rigid body that represents the Crazyflie
-rigid_body_name = 'not_flap'
+rigid_body_name = 'flapper_02'
 
 # True: send position and orientation; False: send position only
 send_full_pose = True
@@ -70,10 +70,6 @@ orientation_std_dev = 4.5e-3
 # trajectories
 
 snn_control = False
-
-# True: fly the velocity-based sequence (run_velocity_sequence).
-# False: fly the position/go_to sequence (run_sequence).
-USE_VELOCITY_SEQUENCE = True
 
 # battery variables
 batt_level = 0
@@ -104,7 +100,6 @@ class MocapWrapper(Thread):
         print('Connecting to mocap system')
         mc = motioncapture.connect(mocap_system_type, {'hostname': host_name})
         print('Connecting to optitrack successful')
-        last_print = 0.0
         while self._stay_open:
             mc.waitForNextFrame()
             for name, obj in mc.rigidBodies.items():
@@ -112,12 +107,6 @@ class MocapWrapper(Thread):
                     # print(self.on_pose)
                     if self.on_pose:
                         pos = obj.position
-
-                        now = time.time()
-                        if now - last_print > 0.5:
-                            print(f"MOCAP {self.body_name}: "
-                                  f"x={pos[0]:+.3f} y={pos[1]:+.3f} z={pos[2]:+.3f}")
-                            last_print = now
 
                         # print(f"Position: ({-pos[1]}, {pos[0]}, {pos[2]})")
                         # rotation = {"w": obj.rotation.w, "x": -obj.rotation.y, "y": obj.rotation.x, "z": obj.rotation.z}
@@ -216,10 +205,12 @@ def set_snn_I_gain(cf, gain):
 
 def start_onboard_logging(cf):
     cf.param.set_value('usd.logging', '1')
+    print('Onboard logging started.')
 
 
 def stop_onboard_logging(cf):
     cf.param.set_value('usd.logging', '0')
+    print('Onboard logging stopped.')
 
 
 def get_battery_level(cf):
@@ -264,7 +255,7 @@ def upload_trajectory(cf, trajectory_id, trajectory):
 def run_sequence(cf):
     global batt_level, batt_state, t_start
     # Starting position
-    x = 0
+    x = -2
     y = 0
     z = 1
     # yaw = 90
@@ -272,83 +263,25 @@ def run_sequence(cf):
     cf.platform.send_arming_request(True)
     time.sleep(3.0)
     commander = cf.high_level_commander
-    start_onboard_logging(cf)
     t_start = time.time()
     commander.takeoff(1.0, 2.0)
     time.sleep(6.0)
     # go to starting position
     print('Going to starting position at x=-2')
-    commander.go_to(x, y, z, yaw, 4)
+    commander.go_to(x, y, z, yaw, 1)
     time.sleep(6.0)
     print('Moving to x=2')
-    commander.go_to(x + 2, y, z, yaw, 4)
+    commander.go_to(x + 4, y, z, yaw, 1)
     time.sleep(6.0)
 
     print('Moving back to x=-2')
-    commander.go_to(x, y, z, yaw, 4)
+    commander.go_to(x, y, z, yaw, 1)
     time.sleep(6.0)
     print('Landing')
-    stop_onboard_logging(cf)
     commander.land(0.0, 2.0)
     time.sleep(6.0)
-    commander.stop()
-
-
-def run_velocity_sequence(cf):
-    """
-    Forward/back using send_hover_setpoint (the well-supported Bitcraze
-    velocity pattern): BODY-frame vx/vy velocity while holding an ABSOLUTE
-    altitude (zdistance). This fixes the altitude sag and reliably takes
-    control from the high-level commander.
-
-    Setpoints must be STREAMED continuously (~50 Hz) or the commander times
-    out and the drone drops. Takeoff/land still use the high-level commander;
-    a zero-velocity warm-up grabs control from it before the moves.
-
-    NOTE: send_hover_setpoint vx is BODY-frame forward (drone's heading).
-    With yaw held at ~0 this is a consistent "forward/back" in the room.
-    """
-    global t_start
-
-    hover_z = 1.0          # m, absolute altitude to hold
-    fwd_speed = 0.5        # m/s
-    fwd_time = 4.0         # s  -> +2.0 m
-    back_speed = 0.5       # m/s
-    back_time = 8.0        # s  -> -4.0 m  (net -2.0 m from start)
-    setpoint_hz = 50.0
-    dt = 1.0 / setpoint_hz
-
-    cf.platform.send_arming_request(True)
-    time.sleep(3.0)
-    hlc = cf.high_level_commander
-    start_onboard_logging(cf)
-    t_start = time.time()
-
-    # Take off + settle with the high-level commander
-    print(f'Takeoff to z={hover_z} m')
-    hlc.takeoff(hover_z, 3.0)
-    time.sleep(5.0)
-
-    def stream_hover(vx, duration, label):
-        print(f'{label}: vx={vx:+.2f} m/s, hold z={hover_z} m for {duration:.1f} s')
-        for _ in range(int(duration * setpoint_hz)):
-            # send_hover_setpoint(vx, vy, yawrate_deg_s, zdistance_m)
-            cf.commander.send_hover_setpoint(vx, 0.0, 0.0, hover_z)
-            time.sleep(dt)
-
-    # Zero-velocity hover first: takes control from the HL commander cleanly
-    stream_hover(0.0, 2.0, 'Takeover hover')
-    stream_hover(fwd_speed, fwd_time, 'Forward')
-    stream_hover(-back_speed, back_time, 'Backward')
-    stream_hover(0.0, 2.0, 'Settle hover')
-
-    # Hand back to the high-level commander for landing
-    cf.commander.send_notify_setpoint_stop()
-    print('Landing')
     stop_onboard_logging(cf)
-    hlc.land(0.0, 2.5)
-    time.sleep(4.0)
-    hlc.stop()
+    commander.stop()
 
 
 def reconnect_and_land():
@@ -400,37 +333,6 @@ def stop_logconfig(logconfig):
     logconfig.data_received_cb.remove_callback(log_batt_callback)
 
 
-def log_diag_callback(timestamp, data, logconf):
-    # Velocity tracking + attitude. If the controller never gets the velocity
-    # command (ctrlT.vx ~0) or yaw is wrong, horizontal control fails.
-    print(f"[{time.time() - t_start:.2f}s] DIAG "
-          f"vx: cmd={data['ctrltarget.vx']:+.2f} est={data['stateEstimate.vx']:+.2f} | "
-          f"ctrlT.x={data['ctrltarget.x']:+.2f} | "
-          f"att r={data['stateEstimate.roll']:+.1f} "
-          f"p={data['stateEstimate.pitch']:+.1f} "
-          f"yaw={data['stateEstimate.yaw']:+.1f}")
-
-
-def add_diag_logconfig(cf):
-    # Separate block: 6 floats = 24 B, under the 26 B CRTP log limit.
-    log_config = LogConfig(name='Diag', period_in_ms=500)
-    log_config.add_variable('ctrltarget.vx', 'float')
-    log_config.add_variable('stateEstimate.vx', 'float')
-    log_config.add_variable('ctrltarget.x', 'float')
-    log_config.add_variable('stateEstimate.roll', 'float')
-    log_config.add_variable('stateEstimate.pitch', 'float')
-    log_config.add_variable('stateEstimate.yaw', 'float')
-    log_config.data_received_cb.add_callback(log_diag_callback)
-    cf.log.add_config(log_config)
-    log_config.start()
-    return log_config
-
-
-def stop_diag_logconfig(logconfig):
-    logconfig.stop()
-    logconfig.data_received_cb.remove_callback(log_diag_callback)
-
-
 def console_incoming(console_text):
     print(console_text, end='')
 
@@ -446,13 +348,12 @@ if __name__ == '__main__':
     print('Connect to the Crazyflie')
     with SyncCrazyflie(uri, cf=Crazyflie(rw_cache='./cache')) as scf:
         cf = scf.cf
+        mission_completed = False
 
         cf.connection_lost.add_callback(connection_failed_link_error)
-        # DEBUG: capture firmware console (assert/hardfault snapshot on reboot)
-        cf.console.receivedChar.add_callback(console_incoming)
+        # cf.console.receivedChar.add_callback(console_incoming)
 
         log_config = add_logconfig(cf)
-        diag_config = add_diag_logconfig(cf)
 
         # Set up a callback to handle data from the mocap system
         mocap_wrapper.on_pose = lambda pose: send_extpose_quat(cf, pose[0], pose[1], pose[2], pose[3])
@@ -460,23 +361,15 @@ if __name__ == '__main__':
         # adjust_orientation_sensitivity(cf)
         print('Activating the kalman estimator')
         activate_kalman_estimator(cf)
-
-        # Record flow WITHOUT fusing it. With the decoupled mtf02 firmware,
-        # flowDisable gates FUSION only -- the dpixels are still logged. So we
-        # fly stably on mocap (flow NOT fed to the EKF, avoiding the
-        # mis-calibrated-flow instability) while still recording flow as data.
-        # (Set to '0' only once flowScale is calibrated and you want flow-aided
-        # flight.)
-        # print('MTF-02 flow: logged but NOT fused (mtf02.flowDisable=1)')
-        # cf.param.set_value('mtf02.flowDisable', '1')
-
         reset_estimator(cf)
-        if USE_VELOCITY_SEQUENCE:
-            run_velocity_sequence(cf)
-        else:
+        start_onboard_logging(cf)
+        try:
             run_sequence(cf)
-        time.sleep(1.0)
-        stop_logconfig(log_config)
-        stop_diag_logconfig(diag_config)
+            mission_completed = True
+            time.sleep(1.0)
+        finally:
+            if not mission_completed:
+                stop_onboard_logging(cf)
+            stop_logconfig(log_config)
 
     mocap_wrapper.close()
