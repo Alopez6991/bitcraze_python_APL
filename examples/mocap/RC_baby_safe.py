@@ -43,7 +43,7 @@ uri = uri_helper.uri_from_env(default='radio://0/80/2M/E7E7E7E703')
 SAFE_Z = 2.0          # hover / cruise height (m)
 SAFE_FWD = 11.0       # forward distance (m)
 SAFE_BACK = 3.0       # distance (m) flown backwards after the hover
-SAFE_SPEED = 0.75     # m/s cruise for each go_to leg
+SAFE_SPEED = 1.25     # m/s cruise for each go_to leg
 SAFE_SETTLE = 1.5     # s to settle at each waypoint
 TAKEOFF_HOVER = 1.0   # s to hover after takeoff before moving
 SAFE_HOVER_S = 3.0    # s to hover at the far end before flying backwards
