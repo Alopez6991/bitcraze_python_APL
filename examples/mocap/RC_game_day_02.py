@@ -17,11 +17,11 @@
 #   3. Proximity stop: whenever ae3.dist reads below GD2_DIST_STOP_M (0.3 m) on
 #      GD2_DIST_STOP_N (3) consecutive ae3 FRAMES, the drone hovers
 #      CAM_FINAL_HOVER_S and lands. NaN (no ToF reading) is not "under 0.3" and
-#      resets the count. It is checked while TRACKING and during the SURGE, but
-#      deliberately NOT during the stop/settle stage -- the drone is stationary
-#      there and an abort would only ever be an early land. The count is reset
-#      when the surge begins, so the surge needs three fresh frames of its own.
-#      Set GD2_DIST_STOP_DURING_SURGE_ONLY to drop the tracking-stage check too.
+#      resets the count. GD2_DIST_STOP_DURING_SURGE_ONLY is True, so it runs
+#      ONLY during the surge: not while tracking (state 4 centres the drone
+#      close to the feature, which would land it before it ever surged) and not
+#      during the stop/settle stage (stationary, so an abort there would only
+#      ever be an early land). Set it False to check while tracking as well.
 #   4. The moment the surge triggers, a babies count is drawn and
 #      "babies countd: n" is printed and pinned to the status line. It stays on
 #      screen for the rest of the run -- including after a kill -- and is
@@ -208,9 +208,12 @@ GD2_SETTLE_TIMEOUT_S = 8.0    # s: surge anyway (with a warning) after this
 # control ticks -- the loop runs faster than the camera) -> hover, then land.
 # NaN means "no ToF reading", which is not "under the threshold", so it resets
 # the count rather than counting toward it.
+# DURING_SURGE_ONLY is True: the check runs only while surging. State 4 is
+# "near:dark", so the drone is close to the feature the whole time it is
+# centring -- checking there would land it before it ever surged.
 GD2_DIST_STOP_M = 0.3
 GD2_DIST_STOP_N = 3
-GD2_DIST_STOP_DURING_SURGE_ONLY = False
+GD2_DIST_STOP_DURING_SURGE_ONLY = True
 CAM_FINAL_HOVER_S = 2.0       # "wait 2 seconds" before landing
 
 CAM_RATE_HZ = 50.0            # setpoint stream rate
