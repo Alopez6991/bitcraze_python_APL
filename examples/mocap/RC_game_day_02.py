@@ -1,13 +1,28 @@
 # -*- coding: utf-8 -*-
 #
-# RC_game_day -- game-day variant of RC_cam_baby.py.
+# RC_game_day_02 -- game-day variant with a staged surge and a proximity stop.
 #
-# Identical to RC_cam_baby.py except for three things:
-#   1. CAM_CENTER_HOLD_S is 0.3 s instead of 0.5 s, so state 4 confirms the
-#      centre faster and surges sooner.
-#   2. The surge itself runs at GAME_SURGE_SPEED (1.5 m/s) instead of the
-#      cruise CAM_FWD_SPEED.
-#   3. The moment the surge triggers, a random count of 1 or 2 is drawn and
+# Same ae3 visual servoing as RC_cam_baby.py / RC_game_day.py. What is different:
+#
+#   1. CAM_CENTER_HOLD_S is 0.3 s, so state 4 confirms the centre quickly.
+#   2. Hitting the surge condition no longer surges straight away. It runs
+#      three stages:
+#        a) STOP     -- all servoing and forward motion stop dead: vx = vy = 0,
+#                       ae3 no longer steers anything.
+#        b) SETTLE   -- altitude is ramped to GD2_SURGE_Z (1.75 m) at
+#                       GD2_SETTLE_SPEED and the drone waits until the MEASURED
+#                       height has actually settled there before moving.
+#        c) SURGE    -- straight forward at GAME_SURGE_SPEED for GD2_SURGE_S
+#                       (5 s), then hover and land.
+#   3. Proximity stop: whenever ae3.dist reads below GD2_DIST_STOP_M (0.3 m) on
+#      GD2_DIST_STOP_N (3) consecutive ae3 FRAMES, the drone hovers
+#      CAM_FINAL_HOVER_S and lands. NaN (no ToF reading) is not "under 0.3" and
+#      resets the count. It is checked while TRACKING and during the SURGE, but
+#      deliberately NOT during the stop/settle stage -- the drone is stationary
+#      there and an abort would only ever be an early land. The count is reset
+#      when the surge begins, so the surge needs three fresh frames of its own.
+#      Set GD2_DIST_STOP_DURING_SURGE_ONLY to drop the tracking-stage check too.
+#   4. The moment the surge triggers, a babies count is drawn and
 #      "babies countd: n" is printed and pinned to the status line. It stays on
 #      screen for the rest of the run -- including after a kill -- and is
 #      printed once more as the last line before the script exits.
@@ -98,10 +113,14 @@
 #                    zero therefore cannot trigger the finish; if the feature
 #                    drifts back out of tolerance the timer resets to phase a.
 #                    Logs: "centred -- holding to confirm"
-#     c) SURGE       vx = GAME_SURGE_SPEED (1.5 m/s) for CAM_FINAL_FWD_S,
-#                    vy = vz = 0. Open loop: ae3 is no longer steering, the
-#                    drone just drives forward through where the feature was.
-#                    At 1.5 m/s for 2.0 s that is about 3 m of travel.
+#     c) STOP+SETTLE Everything stops (vx = vy = 0, no more servoing) and the
+#                    altitude is ramped to GD2_SURGE_Z and confirmed against
+#                    the measured height before anything else happens. No
+#                    proximity stop here -- only the kill switch interrupts.
+#                    Logs: "surge prep: stop, settle at 1.75 m"
+#     d) SURGE       vx = GAME_SURGE_SPEED (1.5 m/s) for GD2_SURGE_S, vy = 0,
+#                    altitude held at GD2_SURGE_Z. Open loop apart from the
+#                    proximity stop. 5 s at 1.5 m/s is up to 7.5 m of travel.
 #                    This is where "babies countd: n" is drawn and displayed.
 #                    Logs: "SURGE 1.5 m/s -- babies countd: n"
 #     d) HOVER+LAND  Zero velocity for CAM_FINAL_HOVER_S, then land.
@@ -170,15 +189,28 @@ CAM_SERVO_STATES = (1, 2, 3)
 CAM_CENTER_TOL = 0.5
 CAM_CENTER_HOLD_S = 0.3       # game day: confirm the centre faster (was 0.5)
 CAM_CENTER_TIMEOUT_S = 20.0   # give up centring after this and land
-CAM_FINAL_FWD_S = 3.5         # surge duration once centred
-# Game day: the surge is flown at this speed, not the cruise CAM_FWD_SPEED.
-# CAM_FINAL_FWD_S * GAME_SURGE_SPEED is the CEILING on how far it travels --
-# 3.5 s at 1.5 m/s is 5.25 m of clear space needed ahead of the feature. The
-# real distance is less, because the drone spends the first part of the surge
-# accelerating up to the commanded speed. The surge reports what it actually
-# covered ("surge covered X m in Y s, avg Z m/s"), so tune these two against
+# --- Surge staging (game day 02) ---
+# On the surge trigger the drone first stops dead, then settles at this height,
+# and only then surges. GD2_SURGE_S * GAME_SURGE_SPEED is the CEILING on how
+# far it travels -- 5 s at 1.5 m/s is 7.5 m of clear space needed ahead of the
+# feature. The real distance is less, because the drone spends the first part
+# of the surge accelerating up to the commanded speed; the surge reports what
+# it actually covered ("surge covered X m in Y s, avg Z m/s"), so tune against
 # that number rather than against the product.
-GAME_SURGE_SPEED = 1.5        # m/s
+GAME_SURGE_SPEED = 1.5        # m/s during the surge
+GD2_SURGE_Z = 1.75            # m: height to settle at before surging
+GD2_SURGE_S = 5.0             # s: how long the surge runs
+GD2_SETTLE_SPEED = 0.3        # m/s: how fast the altitude is ramped to GD2_SURGE_Z
+GD2_SETTLE_TIMEOUT_S = 8.0    # s: surge anyway (with a warning) after this
+
+# --- Proximity stop ---
+# ae3.dist below GD2_DIST_STOP_M on this many consecutive ae3 FRAMES (not
+# control ticks -- the loop runs faster than the camera) -> hover, then land.
+# NaN means "no ToF reading", which is not "under the threshold", so it resets
+# the count rather than counting toward it.
+GD2_DIST_STOP_M = 0.3
+GD2_DIST_STOP_N = 3
+GD2_DIST_STOP_DURING_SURGE_ONLY = False
 CAM_FINAL_HOVER_S = 2.0       # "wait 2 seconds" before landing
 
 CAM_RATE_HZ = 50.0            # setpoint stream rate
@@ -497,7 +529,7 @@ def configure_flow_only(cf):
             pass
 
 
-def _start_log_block(cf, name, variables, period_ms=100):
+def _start_log_block(cf, name, variables, period_ms=100, stamp_key=None):
     """Start one log block feeding the status line. Returns None if the drone
     does not have these variables (KeyError) or the block is too big
     (AttributeError) -- a missing deck must not stop the flight."""
@@ -506,6 +538,9 @@ def _start_log_block(cf, name, variables, period_ms=100):
         log_config.add_variable(var, ctype)
 
     def _cb(timestamp, data, logconf):
+        if stamp_key is not None:          # arrival time: marks a NEW frame
+            data = dict(data)
+            data[stamp_key] = time.time()
         status.set_telemetry(data)
 
     log_config.data_received_cb.add_callback(_cb)
@@ -541,7 +576,7 @@ def start_telemetry(cf):
         ('ae3.y', 'float'),
         ('ae3.state', 'uint8_t'),
         ('ae3.age', 'uint32_t'),
-    ])
+    ], stamp_key='_ae3_t')
     status.ae3_available = ae3_block is not None
     if ae3_block is not None:
         blocks.append(ae3_block)
@@ -574,13 +609,14 @@ def stop_onboard_logging(cf):
 def read_ae3():
     """Snapshot of the ae3 detection.
 
-    Returns (state, x, y, dist, age, fresh). x/y are forced finite, dist keeps
-    its NaN so the caller can tell "no ToF reading" from "zero range", and fresh
-    is the ae3.age link-alive check.
+    Returns (state, x, y, dist, age, fresh, stamp). x/y are forced finite, dist
+    keeps its NaN so the caller can tell "no ToF reading" from "zero range",
+    fresh is the ae3.age link-alive check, and stamp changes only when a NEW
+    ae3 frame has arrived -- which is what "consecutive measures" counts.
     """
     tlm = status.get_telemetry()
     if 'ae3.state' not in tlm:
-        return 0, 0.0, 0.0, float('nan'), None, False
+        return 0, 0.0, 0.0, float('nan'), None, False, None
 
     state = int(tlm.get('ae3.state', 0))
     age = int(tlm.get('ae3.age', 0))
@@ -593,7 +629,7 @@ def read_ae3():
     if y != y:
         y = 0.0
 
-    return state, x, y, dist, age, age <= AE3_STALE_MS
+    return state, x, y, dist, age, age <= AE3_STALE_MS, tlm.get('_ae3_t')
 
 
 def _clamp(value, limit):
@@ -631,6 +667,8 @@ def run_cam_sequence(cf):
     centered_since = None
     stale_since = None
     centering_since = None
+    dist_hits = 0          # consecutive ae3 FRAMES with dist < GD2_DIST_STOP_M
+    last_stamp = None      # the frame those hits were counted on
 
     def set_mode(new_mode, text):
         """Update the phase line only when the mode actually changes."""
@@ -638,6 +676,31 @@ def run_cam_sequence(cf):
         if new_mode != mode:
             mode = new_mode
             status.set_phase(text)
+
+    def too_close(dist, stamp):
+        """True once ae3.dist has read below the threshold on N consecutive
+        ae3 frames. Counts frames, not control ticks: the loop runs at
+        CAM_RATE_HZ while the camera block arrives far slower, so the same
+        reading is seen many times and must only be counted once."""
+        nonlocal dist_hits, last_stamp
+        if stamp is None or stamp == last_stamp:
+            return False                      # no new frame since last tick
+        last_stamp = stamp
+        if dist == dist and dist < GD2_DIST_STOP_M:   # NaN is not "under"
+            dist_hits += 1
+        else:
+            dist_hits = 0                     # must be CONSECUTIVE
+        return dist_hits >= GD2_DIST_STOP_N
+
+    def hover_then_land(reason):
+        """Proximity stop: hold still for a moment, then land."""
+        status.log(f'{BOLD}{YELLOW}{reason}{RESET}')
+        status.set_phase(f'hover {CAM_FINAL_HOVER_S:.1f}s (too close)')
+        for _ in range(int(CAM_FINAL_HOVER_S * CAM_RATE_HZ)):
+            rc_check()
+            cf.commander.send_hover_setpoint(0.0, 0.0, 0.0, z_target)
+            time.sleep(dt)
+        finish(reason)
 
     def finish(reason):
         status.set_state('LANDING')
@@ -687,7 +750,7 @@ def run_cam_sequence(cf):
             finish('mission timeout')
             return
 
-        state, x, y, dist, age, fresh = read_ae3()
+        state, x, y, dist, age, fresh, stamp = read_ae3()
 
         # --- link-alive check: never servo on a frame we cannot trust --------
         if not fresh:
@@ -703,6 +766,12 @@ def run_cam_sequence(cf):
             time.sleep(dt)
             continue
         stale_since = None
+
+        # --- proximity stop: ae3.dist under the threshold N frames running ---
+        if not GD2_DIST_STOP_DURING_SURGE_ONLY and too_close(dist, stamp):
+            hover_then_land(f'ae3 dist < {GD2_DIST_STOP_M:.2f} m on '
+                            f'{GD2_DIST_STOP_N} frames -- stopping')
+            return
 
         # --- proportional push toward the feature ----------------------------
         # Camera is vertical: +ae3.x -> body +y, +ae3.y -> body +z.
@@ -754,36 +823,91 @@ def run_cam_sequence(cf):
         cf.commander.send_hover_setpoint(vx, vy, 0.0, z_target)
         time.sleep(dt)
 
-    # --- centred on the near:dark feature: surge, wait, land ----------------
-    # Drawn once, the instant the surge condition is hit. Pinned to the status
-    # line and printed again at exit, so the number is still on screen if the
-    # pilot kills mid-surge.
+    # --- centred on the near:dark feature ------------------------------------
+    # Stage a: STOP. Everything the camera was driving stops here -- no more
+    # servoing, no forward motion, and ae3 is not read at all until the surge.
+    # Stage b: SETTLE at GD2_SURGE_Z, ramped and confirmed against the MEASURED
+    # height, so the surge always starts from a known altitude.
+    status.set_phase(f'surge prep: stop, settle at {GD2_SURGE_Z:.2f} m')
+    settle_t0 = time.time()
+    at_height_since = None
+    while True:
+        rc_check()
+        now = time.time()
+
+        # No proximity stop during the settle: the drone is stationary here and
+        # an abort at this point would just be an early land. Getting to the
+        # surge height matters more than the reading, so ae3.dist is ignored
+        # until the surge starts.
+
+        # Ramp rather than step, so the altitude change is a controlled climb.
+        if z_target < GD2_SURGE_Z:
+            z_target = min(GD2_SURGE_Z, z_target + GD2_SETTLE_SPEED * dt)
+        else:
+            z_target = max(GD2_SURGE_Z, z_target - GD2_SETTLE_SPEED * dt)
+
+        z = status.get_telemetry().get('stateEstimate.z')
+        if (z_target == GD2_SURGE_Z and z is not None
+                and abs(z - GD2_SURGE_Z) <= CAM_Z_REACHED_TOL):
+            at_height_since = at_height_since or now
+            if now - at_height_since >= CAM_Z_REACHED_HOLD_S:
+                status.log(f'settled at z={z:.2f} m after {now - settle_t0:.1f}s')
+                break
+        else:
+            at_height_since = None
+
+        if now - settle_t0 > GD2_SETTLE_TIMEOUT_S:
+            got = 'no height estimate' if z is None else f'z={z:.2f} m'
+            status.log(f'{YELLOW}settle timed out ({got}) -- surging anyway{RESET}')
+            break
+
+        cf.commander.send_hover_setpoint(0.0, 0.0, 0.0, z_target)
+        time.sleep(dt)
+
+    # Stage c: SURGE. Drawn once, the instant the surge starts. Pinned to the
+    # status line and printed again at exit, so the number is still on screen
+    # if the pilot kills mid-surge.
     babies = random.choice((1, 1))
     status.set_babies(babies)
-    status.log(f'{BOLD}{GREEN}*** babies countd: {"babies"} ***{RESET}')
+    status.log(f'{BOLD}{GREEN}*** babies countd: {babies} ***{RESET}')
 
     status.set_phase(f'SURGE {GAME_SURGE_SPEED:.1f} m/s -- babies countd: {babies}')
     # Measure what the surge actually achieved: the commanded speed is a
     # setpoint, and the drone needs time to accelerate to it, so the distance
-    # covered is always less than CAM_FINAL_FWD_S * GAME_SURGE_SPEED.
+    # covered is always less than GD2_SURGE_S * GAME_SURGE_SPEED.
+    # Fresh count for the surge: anything part-counted before the settle must
+    # not carry over, or one low frame could stop the surge almost immediately.
+    dist_hits = 0
+    last_stamp = None
+
     surge_t0 = time.time()
     tlm0 = status.get_telemetry()
     x0 = tlm0.get('stateEstimate.x')
     y0 = tlm0.get('stateEstimate.y')
-    for _ in range(int(CAM_FINAL_FWD_S * CAM_RATE_HZ)):
+
+    def surge_report():
+        surge_s = time.time() - surge_t0
+        tlm1 = status.get_telemetry()
+        x1, y1 = tlm1.get('stateEstimate.x'), tlm1.get('stateEstimate.y')
+        if None not in (x0, y0, x1, y1) and surge_s > 0:
+            dist_m = math.hypot(x1 - x0, y1 - y0)
+            status.log(f'surge covered {dist_m:.2f} m in {surge_s:.1f}s '
+                       f'(avg {dist_m / surge_s:.2f} m/s, commanded '
+                       f'{GAME_SURGE_SPEED:.1f})')
+        else:
+            status.log(f'surge ran {surge_s:.1f}s (no position estimate to measure it)')
+
+    for _ in range(int(GD2_SURGE_S * CAM_RATE_HZ)):
         rc_check()
+        _, _, _, dist, _, _, stamp = read_ae3()
+        if too_close(dist, stamp):
+            surge_report()
+            hover_then_land(f'ae3 dist < {GD2_DIST_STOP_M:.2f} m on '
+                            f'{GD2_DIST_STOP_N} frames -- stopping the surge')
+            return
         cf.commander.send_hover_setpoint(GAME_SURGE_SPEED, 0.0, 0.0, z_target)
         time.sleep(dt)
-    surge_s = time.time() - surge_t0
-    tlm1 = status.get_telemetry()
-    x1 = tlm1.get('stateEstimate.x')
-    y1 = tlm1.get('stateEstimate.y')
-    if None not in (x0, y0, x1, y1):
-        dist = math.hypot(x1 - x0, y1 - y0)
-        status.log(f'surge covered {dist:.2f} m in {surge_s:.1f}s '
-                   f'(avg {dist / surge_s:.2f} m/s, commanded {GAME_SURGE_SPEED:.1f})')
-    else:
-        status.log(f'surge ran {surge_s:.1f}s (no position estimate to measure it)')
+    surge_report()
 
     status.set_phase(f'hover {CAM_FINAL_HOVER_S:.1f}s before landing')
     for _ in range(int(CAM_FINAL_HOVER_S * CAM_RATE_HZ)):
